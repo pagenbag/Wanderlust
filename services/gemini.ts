@@ -93,9 +93,28 @@ const AccommodationAlternativesSchema: Schema = {
 
 // --- Helpers ---
 
+const generateId = () => {
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+};
+
 const generateImageUrl = (name: string, location: string, type: string) => {
-    const safeName = name.replace(/Visit|Tour|Walk|to|the|at/gi, '').trim();
-    const keywords = [safeName, location].filter(Boolean).join(',');
+    // Revert to loremflickr. 
+    // Clean up keywords to avoid 404s and get better results.
+    // e.g. "Guided Tour of Colosseum" -> "Colosseum"
+    const cleanName = name.replace(/Visit|Tour|Walk|to|the|at|in|Explore|Discover|Day|Trip|of|around/gi, '').trim();
+    const shortName = cleanName.split(' ').slice(0, 2).join(' '); // First 2 words usually sufficient
+
+    let keywords = '';
+    if (type === 'meal') {
+        keywords = `food,restaurant,${location}`;
+    } else if (type === 'accommodation') {
+        keywords = `hotel,room,${location}`;
+    } else {
+        // For activities, use location and the simplified name
+        keywords = `${location},${shortName}`;
+    }
+    
+    // Add a random lock to ensure different images for different items, but same image for same item across renders if we were caching (we aren't, but it helps)
     const randomSeed = Math.floor(Math.random() * 10000);
     return `https://loremflickr.com/500/350/${encodeURIComponent(keywords)}/all?lock=${randomSeed}`;
 };
@@ -136,12 +155,12 @@ export const generateItinerary = async (prefs: UserPreferences): Promise<Itinera
           ...day,
           accommodation: {
              ...day.accommodation,
-             id: crypto.randomUUID(),
+             id: generateId(),
              imageUrl: generateImageUrl(day.accommodation.name, prefs.destination, 'hotel')
           },
           activities: day.activities.map((act: any) => ({
             ...act,
-            id: crypto.randomUUID(),
+            id: generateId(),
             imageUrl: generateImageUrl(act.name, act.location || prefs.destination, act.type)
           }))
         }))
@@ -179,7 +198,7 @@ export const suggestAlternatives = async (originalActivity: Activity, prefs: Use
       const parsed = JSON.parse(response.text);
       return parsed.alternatives.map((act: any) => ({
         ...act,
-        id: crypto.randomUUID(),
+        id: generateId(),
         imageUrl: generateImageUrl(act.name, act.location || prefs.destination, act.type)
       }));
     }
@@ -212,7 +231,7 @@ export const suggestAccommodationAlternatives = async (originalAcc: Accommodatio
         const parsed = JSON.parse(response.text);
         return parsed.alternatives.map((acc: any) => ({
           ...acc,
-          id: crypto.randomUUID(),
+          id: generateId(),
           imageUrl: generateImageUrl(acc.name, acc.location || prefs.destination, 'hotel')
         }));
       }

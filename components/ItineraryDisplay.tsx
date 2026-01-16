@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Itinerary, Accommodation, Activity, DayPlan } from '../types';
 import ActivityCard from './ActivityCard';
 import LeafletMap from './LeafletMap';
@@ -20,6 +20,7 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
   const [expandedDays, setExpandedDays] = useState<number[]>([0]); 
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [editingDayIndex, setEditingDayIndex] = useState<number | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const toggleDay = (index: number) => {
     setExpandedDays(prev => 
@@ -34,7 +35,6 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
 
   const handleSaveDay = (dayIndex: number) => {
       setEditingDayIndex(null);
-      // The state is already updated via handleChange, so just exit edit mode
   };
 
   const handleUpdateDay = (dayIndex: number, updatedDay: DayPlan) => {
@@ -64,11 +64,22 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
       let locations: any[] = [];
       itinerary.days.forEach(day => {
           if (day.accommodation.coordinates) {
-              locations.push({ ...day.accommodation.coordinates, title: day.accommodation.name, type: 'accommodation' });
+              locations.push({ 
+                  ...day.accommodation.coordinates, 
+                  title: day.accommodation.name, 
+                  type: 'accommodation',
+                  day: day.dayNumber
+              });
           }
           day.activities.forEach(act => {
               if (act.coordinates && act.type !== 'travel') {
-                  locations.push({ ...act.coordinates, title: act.name, type: act.type === 'meal' ? 'meal' : 'activity' });
+                  locations.push({ 
+                      ...act.coordinates, 
+                      title: act.name, 
+                      type: act.type === 'meal' ? 'meal' : 'activity',
+                      day: day.dayNumber,
+                      time: act.time
+                  });
               }
           });
       });
@@ -76,16 +87,26 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
   };
 
   // --- PDF Export ---
-  const handleExportPDF = () => {
-    const element = document.getElementById('itinerary-content');
-    const opt = {
-      margin: 0.5,
-      filename: `Travel_Itinerary_${itinerary.destination.replace(/\s/g, '_')}.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
-    };
-    html2pdf().set(opt).from(element).save();
+  const handleExportPDF = async () => {
+    // 1. Enter export mode (expands all days)
+    setIsExporting(true);
+    
+    // Wait for state update and DOM render
+    setTimeout(() => {
+        const element = document.getElementById('itinerary-content');
+        const opt = {
+          margin: 0.25,
+          filename: `Travel_Itinerary_${itinerary.destination.replace(/\s/g, '_')}.pdf`,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, logging: true }, // useCORS attempts to capture external images
+          jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+          pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+        };
+
+        html2pdf().set(opt).from(element).save().then(() => {
+            setIsExporting(false); // Reset after save
+        });
+    }, 500);
   };
 
   return (
@@ -107,9 +128,14 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
                         </button>
                         <button 
                             onClick={handleExportPDF}
-                            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-medium transition"
+                            disabled={isExporting}
+                            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50"
                         >
-                            <span className="material-icons-outlined">picture_as_pdf</span>
+                            {isExporting ? (
+                                <span className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin"></span>
+                            ) : (
+                                <span className="material-icons-outlined">picture_as_pdf</span>
+                            )}
                             Export PDF
                         </button>
                     </div>
@@ -153,24 +179,38 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
                           <span className="material-icons-outlined">close</span>
                       </button>
                   </div>
-                  <div className="flex-grow relative">
-                      <LeafletMap locations={getAllMapLocations()} />
+                  <div className="flex-grow relative overflow-hidden">
+                      <LeafletMap locations={getAllMapLocations()} days={itinerary.duration} />
                   </div>
               </div>
           </div>
       )}
 
       {/* Content for PDF Generation */}
-      <div id="itinerary-content" className="space-y-6">
+      <div id="itinerary-content" className="space-y-6 bg-slate-950 p-2">
+        {/* Render Map for PDF Export Only */}
+        {isExporting && (
+             <div className="mb-6 p-4 bg-slate-900 rounded-xl border border-slate-700">
+                 <h2 className="text-2xl font-bold text-white mb-4">Route Map</h2>
+                 <div className="h-[400px] w-full rounded-lg overflow-hidden relative">
+                     {/* Note: Leaflet maps might struggle to render in html2pdf depending on CORS, 
+                         but we render it here to attempt capture. 
+                         If CORS fails for tiles, markers usually still show on a blank bg. */}
+                     <LeafletMap locations={getAllMapLocations()} days={itinerary.duration} />
+                 </div>
+             </div>
+        )}
+
         {itinerary.days.map((day, dayIndex) => {
-           const isExpanded = expandedDays.includes(dayIndex);
+           // If exporting, force expand all days. Otherwise use state.
+           const isExpanded = isExporting ? true : expandedDays.includes(dayIndex);
            const isEditing = editingDayIndex === dayIndex;
            
            return (
-            <div key={dayIndex} className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-lg transition-all break-inside-avoid">
+            <div key={dayIndex} className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-lg transition-all break-inside-avoid mb-6">
                 {/* Day Header */}
                 <div className="w-full flex flex-col md:flex-row md:items-center justify-between p-6 bg-slate-800/50 border-b border-slate-700/50">
-                    <div className="flex items-center gap-4 cursor-pointer flex-grow" onClick={() => toggleDay(dayIndex)}>
+                    <div className="flex items-center gap-4 cursor-pointer flex-grow" onClick={() => !isExporting && toggleDay(dayIndex)}>
                         <div className="w-12 h-12 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-500/20">
                             {day.dayNumber}
                         </div>
@@ -191,7 +231,7 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
                     </div>
                     
                     <div className="mt-4 md:mt-0 flex items-center gap-4">
-                        {!isEditing ? (
+                        {!isEditing && !isExporting ? (
                              <button 
                                 onClick={() => setEditingDayIndex(dayIndex)}
                                 className="text-indigo-400 hover:text-indigo-300 text-xs font-bold uppercase tracking-wider flex items-center gap-1 print:hidden"
@@ -199,7 +239,7 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
                                 <span className="material-icons-outlined text-sm">edit</span>
                                 Edit Day
                              </button>
-                        ) : (
+                        ) : isEditing ? (
                              <button 
                                 onClick={() => handleSaveDay(dayIndex)}
                                 className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-bold uppercase tracking-wider flex items-center gap-1 print:hidden"
@@ -207,7 +247,7 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
                                 <span className="material-icons-outlined text-sm">check</span>
                                 Done
                              </button>
-                        )}
+                        ) : null}
 
                         <div className="flex gap-4 text-xs font-mono text-slate-400 border-l border-slate-700 pl-4">
                             <div className="flex flex-col items-end">
@@ -220,23 +260,25 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
                                 <span className="text-white">{day.stats.totalTravelTime}</span>
                             </div>
                         </div>
-                        <button onClick={() => toggleDay(dayIndex)} className="print:hidden">
-                            <span className={`material-icons-outlined text-slate-500 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}>
-                                expand_more
-                            </span>
-                        </button>
+                        {!isExporting && (
+                            <button onClick={() => toggleDay(dayIndex)} className="print:hidden">
+                                <span className={`material-icons-outlined text-slate-500 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}>
+                                    expand_more
+                                </span>
+                            </button>
+                        )}
                     </div>
                 </div>
 
                 {/* Collapsible Content */}
-                <div className={`transition-all duration-500 ease-in-out overflow-hidden ${isExpanded ? 'max-h-[3000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+                <div className={`transition-all duration-500 ease-in-out overflow-hidden ${isExpanded ? 'max-h-[5000px] opacity-100' : 'max-h-0 opacity-0'}`}>
                     <div className="p-6 pt-0 border-t border-slate-700/50">
                         
                         {/* Accommodation */}
                         <div className="mt-6 mb-8 p-1 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-2xl border border-indigo-500/20">
                             <div className="bg-slate-900/90 rounded-xl p-4 flex flex-col md:flex-row gap-6 items-start">
-                                <div className="relative group/acc-img flex-shrink-0">
-                                    <img src={day.accommodation.imageUrl} alt={day.accommodation.name} className="w-24 h-24 rounded-lg object-cover bg-slate-800" />
+                                <div className="relative group/acc-img flex-shrink-0 w-full md:w-32 h-32">
+                                    <img src={day.accommodation.imageUrl} alt={day.accommodation.name} className="w-full h-full rounded-lg object-cover bg-slate-800" crossOrigin="anonymous" />
                                     <a 
                                         href={getPhotosLink(day.accommodation.name, day.accommodation.location)}
                                         target="_blank" 
@@ -271,19 +313,15 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({
                                     
                                     <div className="flex items-center gap-4 text-xs text-indigo-300 flex-wrap">
                                         <span className="font-mono bg-indigo-950/50 px-2 py-1 rounded">{day.accommodation.price}</span>
-                                        {day.accommodation.bookingLink && (
+                                        {day.accommodation.bookingLink && !isExporting && (
                                             <a href={day.accommodation.bookingLink} target="_blank" rel="noreferrer" className="underline hover:text-white flex items-center gap-1 print:hidden">
                                                 <span className="material-icons-outlined text-xs">book_online</span>
                                                 Book Now
                                             </a>
                                         )}
-                                        <a href={getPhotosLink(day.accommodation.name, day.accommodation.location)} target="_blank" rel="noreferrer" className="hover:text-white flex items-center gap-1 print:hidden">
-                                            <span className="material-icons-outlined text-xs">collections</span>
-                                            Photos
-                                        </a>
                                     </div>
                                 </div>
-                                {!isEditing && (
+                                {!isEditing && !isExporting && (
                                     <button 
                                         onClick={() => onSuggestAccommodation(dayIndex, day.accommodation)}
                                         disabled={loadingId === day.accommodation.id}
